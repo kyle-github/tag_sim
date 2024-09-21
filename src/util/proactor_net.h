@@ -18,6 +18,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "buf.h"
 #include "status.h"
 
 
@@ -40,6 +41,8 @@ typedef enum {
 
 
 typedef enum {
+    PROACTOR_EVENT_TICK,
+    PROACTOR_EVENT_TIMEOUT,
     PROACTOR_EVENT_WAKE,
     PROACTOR_EVENT_RUN,
     PROACTOR_EVENT_STOP,
@@ -47,26 +50,24 @@ typedef enum {
 } proactor_event_t;
 
 
-typedef enum {
-    PROACTOR_CB_STATUS_DONE,
-    PROACTOR_CB_STATUS_CONTINUE,
-} proactor_cb_status_t;
 
 /* forward declaration.  Implementation is hidden. */
-typedef struct proactor_t proactor_t;
+struct proactor_t proactor_t;
+struct proactor_socket_t;
+
 
 /* callback for proactor events */
-typedef status_t (*proactor_event_cb_t)(proactor_t *proactor, proactor_event_t event, void *app_data);
+typedef status_t (*proactor_event_cb_t)(struct proactor_t *proactor, proactor_event_t event, status_t status, void *app_data);
 
-extern proactor_t *proactor_net_create(proactor_event_cb_t event_cb, void *app_data);
-extern void proactor_net_dispose(proactor_t *proactor);
+extern struct proactor_t *proactor_net_create(proactor_event_cb_t event_cb, void *sock_data, void *app_data, uint64_t tick_period_ms);
+extern void proactor_net_dispose(struct proactor_t *proactor);
 
-extern status_t proactor_net_get_status(proactor_t *proactor);
+extern status_t proactor_net_get_status(struct proactor_t *proactor);
 
-extern void proactor_net_run(proactor_t *proactor);
-extern void proactor_net_stop(proactor_t *proactor);
+extern void proactor_net_run(struct proactor_t *proactor);
+extern void proactor_net_stop(struct proactor_t *proactor);
 
-extern void proactor_net_wake(proactor_t *proactor);
+extern void proactor_net_wake(struct proactor_t *proactor);
 
 
 
@@ -77,49 +78,27 @@ extern void proactor_net_wake(proactor_t *proactor);
  */
 
 
-typedef struct {
-    void *data_buffer;
-    size_t buffer_capacity;
-    size_t data_length;
-} proactor_buf_t;
+/* define a simple buffer struct for passing buffers back and forth across the API boundary. */
 
 
-typedef intptr_t proactor_sock_handle_t;
+extern status_t proactor_net_socket_open(struct proactor_t *proactor, struct proactor_socket_t **socket, proactor_socket_type_t socket_type, const char *address, uint16_t port, void *sock_data, void *app_data);
+extern status_t proactor_net_socket_close(struct proactor_socket_t *socket);
 
 
-
-/**
- * @brief Open a socket of the requested type and provide a handle to it.
- *
- * The address and port are used differently depending on the type of socket:
- *
- * PROACTOR_SOCK_TCP_LISTENER - address and port are local for binding and listening.
- *
- * PROACTOR_SOCK_TCP_CLIENT - address and port are locate a remote service.
- *
- * PROACTOR_SOCK_UDP - address and port are optional and indicate a local address binding.
- *
- * @param proactor - pointer to the proactor instance.
- * @param sock_handle_ptr - pointer to where the socket handle should be set.
- * @param socket_type - type of the socket.
- * @param address - IP address as a string.
- * @param port - port as an unsigned 16-bit integer
- * @return status_t
- */
-extern status_t proactor_net_open_socket(proactor_t *proactor, proactor_sock_handle_t *socket_handle_ptr, proactor_socket_type_t socket_type, const char *address, uint16_t port);
-
-extern status_t proactor_net_socket_close(proactor_sock_handle_t sock_handle);
-
-/* accept new client connections */
-typedef proactor_cb_status_t (*on_accept_cb_func_t)(proactor_sock_handle_t listener_sock_handle, proactor_sock_handle_t client_sock_handle, void *app_data);
-extern status_t proactor_net_start_accept(proactor_sock_handle_t listener_sock_handle, on_accept_cb_func_t accept_cb, void *app_data);
+typedef status_t (*on_accept_cb_func_t)(struct proactor_socket_t *listener_socket, struct proactor_socket_t *client_socket, status_t status, void *sock_data, void *app_data);
+typedef status_t (*on_close_cb_func_t)(struct proactor_socket_t *socket, status_t status, void *sock_data, void *app_data);
+typedef status_t (*on_receive_cb_func_t)(struct proactor_socket_t *socket, struct sockaddr *remote_addr, proactor_buf_t *buffer, status_t status, void *sock_data, void *app_data);
+typedef status_t (*on_sent_cb_func_t)(struct proactor_socket_t *socket, proactor_buf_t *buffer, status_t status, void *sock_data, void *app_data);
+typedef status_t (*on_tick_cb_func_t)(struct proactor_socket_t *socket, status_t status, void *sock_data, void *app_data);
 
 
-/* receive data */
-typedef proactor_cb_status_t (*on_receive_cb_func_t)(proactor_sock_handle_t sock_handle, const char *address, uint16_t port, proactor_buf_t *buffer, status_t status, void *app_data);
-extern status_t proactor_net_start_receive(proactor_sock_handle_t socket_handle, proactor_buf_t *buffer, on_receive_cb_func_t receive_cb, void *app_data);
+extern status_t proactor_net_socket_set_accept_callback(struct proactor_socket_t *listener_socket, on_accept_cb_func_t accept_cb);
+extern status_t proactor_net_socket_set_close_callback(struct proactor_socket_t *socket, on_close_cb_func_t close_cb);
+extern status_t proactor_net_socket_set_receive_callback(struct proactor_socket_t *socket, on_receive_cb_func_t receive_cb);
+extern status_t proactor_net_socket_set_sent_callback(struct proactor_socket_t *socket, on_sent_cb_func_t sent_cb);
+extern status_t proactor_net_socket_set_tick_callback(struct proactor_socket_t *socket, on_tick_cb_func_t tick_cb);
 
-
-/* send data */
-typedef proactor_cb_status_t (*on_sent_cb_func_t)(proactor_sock_handle_t sock_handle, proactor_buf_t *buffer, status_t status, void *app_data);
-extern status_t proactor_net_start_send(proactor_sock_handle_t socket_handle, proactor_buf_t *buffer, on_sent_cb_func_t receive_cb, void *app_data);
+extern status_t proactor_net_start_accept(struct proactor_socket_t *listener_socket);
+extern status_t proactor_net_start_receive(struct proactor_socket_t *socket, proactor_buf_t *buf);
+extern status_t proactor_net_start_send(struct proactor_socket_t *socket, proactor_buf_t *buf);
+extern status_t proactor_net_start_timer(struct proactor_socket_t *socket);
